@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { classifyBatch } from '../services/triage.service.js';
-import { recordBatch } from '../utils/stats.store.js';
+import { recordBatch, getStats } from '../utils/stats.store.js';
 
 // Create an isolated Express router specifically for triage operations
 const router = Router();
@@ -54,6 +54,19 @@ router.post('/', async (req, res) => {
   } catch (error) {
     // Blanket catch-all to prevent server crashing while giving feedback
     return res.status(500).json({ error: 'Failed during AI classification: ' + error.message });
+  }
+});
+
+/**
+ * GET /stats
+ * Retrieves an aggregated summary of processing statistics over the last 24 hours.
+ */
+router.get('/stats', (req, res) => {
+  try {
+    const stats = getStats();
+    return res.status(200).json(stats);
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to retrieve stats.' });
   }
 });
 
