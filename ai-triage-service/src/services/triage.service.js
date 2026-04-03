@@ -5,6 +5,42 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 /**
+ * Model Name to be used.
+ * @constant {string}
+ */
+const MODEL_NAME = 'claude-sonnet-4-20250514';
+
+/**
+ * Max output tokens for generation.
+ * @constant {number}
+ */
+const MAX_TOKENS = 4096;
+
+/**
+ * Temperature indicating deterministic output.
+ * @constant {number}
+ */
+const TEMPERATURE = 0;
+
+/**
+ * Allowed Ticket Categories
+ * @constant {string[]}
+ */
+const ALLOWED_CATEGORIES = ['Billing', 'Technical', 'Account', 'Feature Request', 'Other'];
+
+/**
+ * Allowed Ticket Priorities
+ * @constant {string[]}
+ */
+const ALLOWED_PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
+
+/**
+ * Allowed Team Assignments
+ * @constant {string[]}
+ */
+const ALLOWED_TEAMS = ['Billing Team', 'Engineering', 'Customer Success', 'Product'];
+
+/**
  * System prompt definition outlining the boundaries and structure of classification.
  * We enforce JSON output without markdown wrapper and mandate explicit allowed field values.
  * @constant {string}
@@ -15,9 +51,9 @@ Do not wrap the output in markdown codeblocks like \`\`\`json. Return only raw J
 
 Each object in the array MUST contain exactly these fields:
 - id: (matching the ticket ID)
-- category: (Allowed values: Billing, Technical, Account, Feature Request, Other)
-- priority: (Allowed values: Low, Medium, High, Critical)
-- assigned_team: (Allowed values: Billing Team, Engineering, Customer Success, Product)
+- category: (Allowed values: ${ALLOWED_CATEGORIES.join(', ')})
+- priority: (Allowed values: ${ALLOWED_PRIORITIES.join(', ')})
+- assigned_team: (Allowed values: ${ALLOWED_TEAMS.join(', ')})
 - summary: (A brief summary of the ticket, maximum 20 words)
 
 Input format will be a list of tickets with their ID and description.
@@ -33,63 +69,66 @@ Deterministically classify the tickets based on the descriptions provided.`;
  * @throws {Error} If the AI response cannot be parsed or the API call fails.
  */
 export async function classifyBatch(tickets) {
-  // Initialize the Anthropic client. It automatically picks up ANTHROPIC_API_KEY from the environment.
   const anthropic = new Anthropic();
   
-  // Format the sequence of tickets to inject cleanly into the user prompt
   const formattedTickets = tickets
     .map(t => `ID: ${t.id}\nDescription: ${t.description}`)
     .join('\n\n---\n\n');
   
   const userPrompt = `Please classify the following tickets:\n\n${formattedTickets}`;
   
-  const startTime = Date.now();
+  let attempts = 0;
+  const maxAttempts = 2;
   
-  // Create a structured API request with exactly specified constraints
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514', // Using the exact requested model version
-    max_tokens: 1024,
-    temperature: 0, // Deterministic output requirement
-    system: SYSTEM_PROMPT,
-    messages: [
-      { role: 'user', content: userPrompt }
-    ]
-  });
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let cumulativeProcessingTime = 0;
   
-  const endTime = Date.now();
-  const processingTime = endTime - startTime;
-  
-  // Isolate the text segment from the Anthropic response
-  let responseText = response.content[0].text;
-  
-  // Robustly handle cases where the model disobeys instructions and uses markdown code fences
-  if (responseText.startsWith('```')) {
-    const lines = responseText.split('\n');
-    // Strip the opening fence
-    lines.shift();
-    // Strip the closing fence if it's the last discrete line
-    if (lines.length > 0 && lines[lines.length - 1].startsWith('```')) {
-      lines.pop();
+  while (attempts < maxAttempts) {
+    attempts++;
+    const startTime = Date.now();
+    
+    const response = await anthropic.messages.create({
+      model: MODEL_NAME,
+      max_tokens: MAX_TOKENS,
+      temperature: TEMPERATURE,
+      system: SYSTEM_PROMPT,
+      messages: [
+        { role: 'user', content: userPrompt }
+      ]
+    });
+    
+    cumulativeProcessingTime += (Date.now() - startTime);
+    totalInputTokens += response.usage.input_tokens || 0;
+    totalOutputTokens += response.usage.output_tokens || 0;
+    
+    let responseText = response.content[0].text;
+    
+    if (responseText.startsWith('```')) {
+      const lines = responseText.split('\n');
+      lines.shift();
+      if (lines.length > 0 && lines[lines.length - 1].startsWith('```')) {
+        lines.pop();
+      }
+      responseText = lines.join('\n').trim();
     }
-    // Rejoin the remaining lines
-    responseText = lines.join('\n').trim();
-  }
-  
-  let classifications;
-  try {
-    // Attempt parsing. Will throw if response text is invalid JSON
-    classifications = JSON.parse(responseText);
-  } catch (error) {
-    // Throw a descriptive semantic error, including the raw text context
-    throw new Error(`Failed to parse AI response as JSON. Raw response: ${responseText}`);
-  }
-  
-  return {
-    classifications,
-    processingTime,
-    tokenCounts: {
-      input: response.usage.input_tokens || 0,
-      output: response.usage.output_tokens || 0
+    
+    try {
+      const classifications = JSON.parse(responseText);
+      return {
+        classifications,
+        processingTime: cumulativeProcessingTime,
+        tokenCounts: {
+          input: totalInputTokens,
+          output: totalOutputTokens
+        }
+      };
+    } catch (error) {
+      console.warn(`[Warning] Failed to parse LLM response on attempt ${attempts}. Raw response: ${responseText}`);
+      if (attempts >= maxAttempts) {
+        console.error(responseText);
+        throw new Error('LLM response could not be parsed after retry. Raw response logged above.');
+      }
     }
-  };
+  }
 }

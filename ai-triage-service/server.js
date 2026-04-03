@@ -18,24 +18,31 @@ const PORT = process.env.PORT || DEFAULT_PORT;
 // Middleware to parse incoming JSON payloads into JS objects
 app.use(express.json());
 
+/**
+ * Middleware to force Content-Type to application/json for all responses.
+ */
+app.use((req, res, next) => {
+  res.setHeader('Content-Type', 'application/json');
+  next();
+});
+
 // Mount the triage router for requests targeting /triage
 app.use('/triage', triageRoutes);
 
 /**
- * Handle requests to unimplemented routes.
+ * Catch-all 404 handler for any route not matched by the triage router.
  */
 app.use((req, res, next) => {
   res.status(404).json({ error: 'Endpoint not found.' });
 });
 
 /**
- * Centralized error handling middleware.
- * Catches any unhandled errors from route handlers.
+ * Global error-handling middleware.
+ * Must be the last registered middleware.
  */
 app.use((err, req, res, next) => {
-  // We log the error here for system visibility while suppressing stack traces in responses
-  console.error('[Unhandled Error]', err.message);
-  res.status(500).json({ error: 'An internal server error occurred.' });
+  console.error(err.stack);
+  res.status(500).json({ error: err.message });
 });
 
 // Start the server and bind to the specified port

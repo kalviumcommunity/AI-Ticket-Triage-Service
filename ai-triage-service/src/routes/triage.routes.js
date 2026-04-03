@@ -23,6 +23,28 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Invalid input: ticket array cannot be empty.' });
   }
   
+  // Cap the batch size at 100 tickets
+  if (tickets.length > 100) {
+    return res.status(400).json({ error: 'Invalid input: batch size cannot exceed 100 tickets.' });
+  }
+
+  // Validate properties at each index
+  for (let i = 0; i < tickets.length; i++) {
+    const t = tickets[i];
+    
+    if (t === null || typeof t !== 'object') {
+      return res.status(400).json({ error: `Invalid input: ticket at index ${i} is not a valid object.` });
+    }
+    
+    if (!('id' in t) || t.id === undefined || t.id === null) {
+      return res.status(400).json({ error: `Invalid input: ticket at index ${i} is missing the id field.` });
+    }
+    
+    if (typeof t.description === 'string' && t.description.trim() === '') {
+      return res.status(400).json({ error: `Invalid input: ticket description at index ${i} cannot be an empty string.` });
+    }
+  }
+  
   try {
     // Process the classification operation via the isolated service module
     const result = await classifyBatch(tickets);
